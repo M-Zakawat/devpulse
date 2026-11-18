@@ -10,9 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@microlink/react-json-view": "^1.31.50",
     "@tailwindcss/vite": "^4.3.5",
     "axios": "^1.21.1",
+    "chart.js": "^4.6.1",
     "react": "^19.3.1",
+    "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.3.1",
     "socket.io-client": "^4.8.4"
   },

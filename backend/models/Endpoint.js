@@ -1,22 +1,32 @@
+// ============================================================
+// 📦 DevPulse - Endpoint Model (chaos settings ke saath)
+// ============================================================
 const mongoose = require('mongoose');
 
-const endpointSchema = new mongoose.Schema({
-    slug: {
-        type: String,
-        required: true,
-        unique: true,
-        default: () => `hook-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+const endpointSchema = new mongoose.Schema(
+    {
+        name: {
+            type: String,
+            required: [true, 'Endpoint ka naam zaroori hai'],
+            trim: true,
+        },
+        slug: {
+            type: String,
+            required: true,
+            unique: true, // koi duplicate URL nahi
+        },
+        description: {
+            type: String,
+            default: '',
+        },
+        // Chaos testing settings - YE FIELD PEHLE MISSING THI!
+        chaos: {
+            enabled: { type: Boolean, default: false },
+            delayMs: { type: Number, default: 0 },        // kitna delay (ms)
+            forcedStatus: { type: Number, default: null }, // 500/502/504/429
+        },
     },
-    name: { type: String, default: 'My Test Endpoint' },
-
-    // 😈 CHAOS ENGINE CONFIG
-    chaosConfig: {
-        enabled: { type: Boolean, default: false },     // Chaos ON/OFF switch
-        delay: { type: Number, default: 0 },            // Delay in ms (0-10000)
-        errorStatus: { type: Number, default: null }    // Forced error (500/502/504/429)
-    },
-
-    createdAt: { type: Date, default: Date.now }
-});
+    { timestamps: true }
+);
 
 module.exports = mongoose.model('Endpoint', endpointSchema);

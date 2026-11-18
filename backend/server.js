@@ -1,150 +1,98 @@
-require('dotenv').config();
+// ============================================================
+// ⚡ DevPulse - Backend Server (server.js) — v3 FIXED
+// Fix: env load ab Node 22 ke BUILT-IN se (koi package nahi chahiye)
+// Order: Env -> Imports -> App -> Middleware -> Routes -> Socket.io -> DB+Listen
+// ============================================================
+
+// ---------- 1) ENV LOAD (sab se pehle, Node 22 built-in) ----------
+try {
+    process.loadEnvFile(); // backend/.env khud load kar leta hai
+    console.log('✅ .env load ho gayi');
+} catch (e) {
+    console.log('ℹ️ .env file nahi mili - default values use ho rahi hain');
+}
+
+// ---------- 2) IMPORTS ----------
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
+const mongoose = require('mongoose');
 const { Server } = require('socket.io');
 
-const app = express();
+// Routes ke requires (routes folder me ye 3 files honi chahiye:
+// endpoints.js, webhooks.js, analytics.js - naam alag hai to yahan theek karo)
+const endpointRoutes = require('./routes/endpoints');
+const webhookRoutes = require('./routes/webhook');
+const analyticsRoutes = require('./routes/analytics');
+
+// ---------- 3) APP BANAO (iske baad hi koi app.use!) ----------
+const app = express(); // <-- app YAHAN paida hota hai
+
+// ---------- 4) MIDDLEWARE ----------
+app.use(cors({ origin: '*' })); // dev ke liye open CORS
+app.use(express.json()); // JSON body parse - webhook payloads ke liye zaroori
+
+// ---------- 5) ROUTES (app banne ke baad) ----------
+// Health check - browser me http://localhost:5000 kholo to ye dikhega
+app.get('/', (req, res) => {
+    res.json({ status: 'ok', message: '⚡ DevPulse API chal rahi hai!' });
+});
+
+app.use('/api/endpoints', endpointRoutes);   // endpoint CRUD + logs + chaos
+app.use('/api/analytics', analyticsRoutes);  // analytics ka data
+app.use('/hooks', webhookRoutes);            // webhook receiver (sab methods)
+
+// ---------- 6) SOCKET.IO SETUP ----------
 const server = http.createServer(app);
 
-// ================== SOCKET.IO SETUP ==================
 const io = new Server(server, {
-    cors: { origin: "*" } // Frontend (React) ko allow karo
+    cors: {
+        origin: '*',
+        methods: ['GET', 'POST'],
+    },
 });
 
-// io ko globally available banao (routes se access karne ke liye)
+// io ko app pe set karo - controllers me req.app.get('socketio') se milega
 app.set('socketio', io);
 
-// ================== MIDDLEWARE ==================
-app.use(cors());          // React frontend allow
-app.use(express.json());  // JSON body parser
-
-// ================== MODELS ==================
-const Endpoint = require('./models/Endpoint');
-const WebhookLog = require('./models/WebhookLog');
-
-// ================== WEBHOOK ROUTES ==================
-const webhookRoutes = require('./routes/webhook');
-app.use('/webhook', webhookRoutes);
-
-// ================== ENDPOINT CREATION API ==================
-// Dashboard ka "Create New Endpoint" button yeh call karega
-app.post('/api/endpoints', async (req, res) => {
-    try {
-        const { name } = req.body;
-
-        // Automatic Unique Slug Generator (e.g., hook-x7y8z9abc)
-        const slug = `hook-${Math.random().toString(36).substr(2, 9)}`;
-
-        const newEndpoint = await Endpoint.create({ slug, name });
-
-        res.status(201).json({
-            message: 'Endpoint created successfully!',
-            webhook_url: `http://localhost:5000/webhook/${slug}`,
-            data: newEndpoint
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Get all endpoints (Dashboard pe list dikhane ke liye)
-app.get('/api/endpoints', async (req, res) => {
-    try {
-        const endpoints = await Endpoint.find().sort({ createdAt: -1 });
-        res.json(endpoints);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-// GET single endpoint (Chaos settings load karne ke liye)
-app.get('/api/endpoints/:slug', async (req, res) => {
-    try {
-        const endpoint = await Endpoint.findOne({ slug: req.params.slug });
-        if (!endpoint) {
-            return res.status(404).json({ error: 'Endpoint not found!' });
-        }
-        res.json(endpoint);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// 😈 UPDATE CHAOS RULES (Dashboard ke toggle switches yeh call karenge)
-app.patch('/api/endpoints/:slug/chaos', async (req, res) => {
-    try {
-        const { slug } = req.params;
-        const { enabled, delay, errorStatus } = req.body;
-
-        const endpoint = await Endpoint.findOneAndUpdate(
-            { slug },
-            {
-                chaosConfig: {
-                    enabled: enabled || false,
-                    delay: delay || 0,
-                    errorStatus: errorStatus || null
-                }
-            },
-            { new: true }
-        );
-
-        if (!endpoint) {
-            return res.status(404).json({ error: 'Endpoint not found!' });
-        }
-
-        res.json({
-            message: '😈 Chaos rules updated!',
-            chaosConfig: endpoint.chaosConfig
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Get logs for a specific endpoint (History dikhane ke liye)
-app.get('/api/logs/:slug', async (req, res) => {
-    try {
-        const logs = await WebhookLog.find({ endpointSlug: req.params.slug })
-            .sort({ receivedAt: -1 })
-            .limit(50);
-        res.json(logs);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// ================== HEALTH CHECK ==================
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'DevPulse Engine Running with Real-time! 🚀',
-        socket: 'Active',
-        database: 'Connected'
-    });
-});
-
-// ================== SOCKET.IO CONNECTION HANDLER ==================
 io.on('connection', (socket) => {
-    console.log(`👤 Dashboard Connected: ${socket.id}`);
+    console.log('🔌 Client connected:', socket.id);
 
-    // Jab frontend specific slug ko listen karna chahe (room join)
+    // Frontend specific endpoint ka room join karta hai
     socket.on('join-room', (slug) => {
         socket.join(slug);
-        console.log(`📺 Socket joined room: ${slug}`);
+        console.log(`👋 Socket ${socket.id} joined room: ${slug}`);
+    });
+
+    // Endpoint switch karte waqt purana room chhodo
+    socket.on('leave-room', (slug) => {
+        if (slug) {
+            socket.leave(slug);
+            console.log(`🚪 Socket ${socket.id} left room: ${slug}`);
+        }
     });
 
     socket.on('disconnect', () => {
-        console.log(`👋 Dashboard Disconnected: ${socket.id}`);
+        console.log('❌ Client disconnected:', socket.id);
     });
 });
 
-// ================== DATABASE CONNECTION ==================
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/devpulse')
-    .then(() => console.log('✅ MongoDB Connected Successfully!'))
-    .catch(err => console.error('❌ MongoDB Connection Error:', err));
-
-// ================== START SERVER ==================
+// ---------- 7) DB CONNECT + SERVER START ----------
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {   // 👈 server.listen (app.listen NAHI!)
-    console.log(`🔥 DevPulse Backend running on port ${PORT}`);
-});
+// Dono common naam check karo: MONGO_URI ya MONGODB_URI (jo .env me ho)
+const MONGO_URI =
+    process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/devpulse';
+
+mongoose
+    .connect(MONGO_URI)
+    .then(() => {
+        // Password hai to mask kar ke dikhao (pro habit 😎)
+        console.log('✅ Database connected successfully');
+        server.listen(PORT, () => {
+            console.log(`🔥 DevPulse backend chal gaya: http://localhost:${PORT}`);
+        });
+    })
+    .catch((err) => {
+        console.error('❌ MongoDB connect nahi hua:', err.message);
+        process.exit(1);
+    });
