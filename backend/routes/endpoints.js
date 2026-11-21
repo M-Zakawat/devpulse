@@ -1,61 +1,70 @@
-// ============================================================
-// 🛣️ DevPulse - Endpoints Routes
-// POST /api/endpoints             -> naya endpoint banao
-// GET  /api/endpoints             -> saare endpoints laao
-// GET  /api/endpoints/:slug/logs  -> ek endpoint ke logs
-// PUT  /api/endpoints/:slug/chaos -> chaos settings save karo
-// ============================================================
+// ============================================
+// DevPulse — backend/routes/endpoints.js
+// Endpoints CRUD + Chaos config yahan handle hoti hai
+// ============================================
 const express = require('express');
 const router = express.Router();
+
 const Endpoint = require('../models/Endpoint');
 const WebhookLog = require('../models/WebhookLog');
 
-// Random slug generator (hook-x7k2p9qz style)
-const generateSlug = () => `hook-${Math.random().toString(36).substr(2, 9)}`;
+// ----------------------------------------------------------
+// Helper: unique slug generate karta hai (hook-xxxxxxxxx)
+// Agar DB me collision ho to loop me dobara try karta hai
+// ----------------------------------------------------------
+const makeSlug = async () => {
+    let slug;
+    let exists = true;
+    while (exists) {
+        slug = 'hook-' + Math.random().toString(36).substring(2, 11);
+        exists = await Endpoint.findOne({ slug });
+    }
+    return slug;
+};
 
-// ---------- 1) NAYA ENDPOINT BANAO ----------
+// ============================================================
+// POST /api/endpoints → naya endpoint create
+// ============================================================
 router.post('/', async (req, res) => {
     try {
         const { name, description } = req.body;
 
+        // Name required — frontend bhi check karta hai, yeh double safety hai
         if (!name || !name.trim()) {
-            return res.status(400).json({ message: 'Endpoint ka naam zaroori hai!' });
+            return res.status(400).json({ error: 'Endpoint name is required' });
         }
 
-        // Unique slug banao (collision ho to dobara try)
-        let slug = generateSlug();
-        let exists = await Endpoint.findOne({ slug });
-        while (exists) {
-            slug = generateSlug();
-            exists = await Endpoint.findOne({ slug });
-        }
+        const slug = await makeSlug();
 
         const endpoint = await Endpoint.create({
             name: name.trim(),
             description: description || '',
             slug,
+            // Fresh endpoint pe chaos by default OFF rehta hai
+            chaos: { enabled: false, delayMs: 0, forcedStatus: null },
         });
 
-        console.log('✅ Naya endpoint ban gaya:', slug);
         res.status(201).json({ data: endpoint });
     } catch (err) {
-        console.error('❌ Create endpoint error:', err.message);
-        res.status(500).json({ message: 'Endpoint create nahi hua' });
+        res.status(500).json({ error: err.message });
     }
 });
 
-// ---------- 2) SAARE ENDPOINTS ----------
+// ============================================================
+// GET /api/endpoints → saare endpoints (dashboard sidebar)
+// ============================================================
 router.get('/', async (req, res) => {
     try {
         const endpoints = await Endpoint.find().sort({ createdAt: -1 });
         res.json({ data: endpoints });
     } catch (err) {
-        console.error('❌ Fetch endpoints error:', err.message);
-        res.status(500).json({ message: 'Endpoints load nahi hue' });
+        res.status(500).json({ error: err.message });
     }
 });
 
-// ---------- 3) EK ENDPOINT KE LOGS ----------
+// ============================================================
+// GET /api/endpoints/:slug/logs → is endpoint ki logs (last 100)
+// ============================================================
 router.get('/:slug/logs', async (req, res) => {
     try {
         const logs = await WebhookLog.find({ slug: req.params.slug })
@@ -63,37 +72,65 @@ router.get('/:slug/logs', async (req, res) => {
             .limit(100);
         res.json({ data: logs });
     } catch (err) {
-        console.error('❌ Fetch logs error:', err.message);
-        res.status(500).json({ message: 'Logs load nahi hue' });
+        res.status(500).json({ error: err.message });
     }
 });
 
-// ---------- 4) CHAOS SETTINGS UPDATE ----------
+// ============================================================
+// PUT /api/endpoints/:slug/chaos → chaos config apply
+//
+// 🐛 BUG FIX YAHAN HUA:
+// Purana code sirf 'chaosEnabled' destructure karta tha, lekin
+// frontend 'enabled' bhejta hai → !!undefined = false → chaos
+// kabhi ON nahi hota tha → har delivery instant 200 milti thi.
+//
+// Ab BULLETPROOF: har naming variant se value pick hoti hai —
+// chaosEnabled / enabled / chaos.enabled / chaosConfig.enabled
+// (delay aur status ke purane/naye naam bhi covered hain).
+// ============================================================
 router.put('/:slug/chaos', async (req, res) => {
     try {
-        const { chaosEnabled, delayMs, forcedStatus } = req.body;
+        const b = req.body || {};
+
+        // --- Chaos ON/OFF: koi bhi naam ho, pakro ---
+        const chaosEnabled =
+            b.chaosEnabled ?? b.enabled ?? b.chaos?.enabled ?? b.chaosConfig?.enabled ?? false;
+
+        // --- Delay: naya 'delayMs' ya purana 'delay' ---
+        const delayMs =
+            Number(b.delayMs ?? b.delay ?? b.chaos?.delayMs ?? b.chaosConfig?.delay) || 0;
+
+        // --- Forced status: 'forcedStatus' / 'status' / 'errorStatus' ---
+        const statusRaw =
+            b.forcedStatus ?? b.status ?? b.errorStatus ?? b.chaos?.forcedStatus ?? null;
+        const forcedStatus = statusRaw ? Number(statusRaw) : null;
 
         const endpoint = await Endpoint.findOneAndUpdate(
             { slug: req.params.slug },
             {
+                // Canonical chaos subdoc — webhooks.js ka chaos engine isi ko parhta hai
                 chaos: {
                     enabled: !!chaosEnabled,
-                    delayMs: Number(delayMs) || 0,
-                    forcedStatus: forcedStatus ? Number(forcedStatus) : null,
+                    delayMs: delayMs,
+                    forcedStatus: forcedStatus,
+                },
+                // Purane docs ka legacy field bhi sync rakhte hain (schema evolution)
+                chaosConfig: {
+                    enabled: !!chaosEnabled,
+                    delay: delayMs,
+                    errorStatus: forcedStatus,
                 },
             },
-            { returnDocument: 'after' }
+            { returnDocument: 'after' } // updated doc wapis mile ga
         );
 
         if (!endpoint) {
-            return res.status(404).json({ message: 'Endpoint nahi mila!' });
+            return res.status(404).json({ error: 'Endpoint not found' });
         }
 
-        console.log(`🔥 Chaos update [${endpoint.slug}]:`, endpoint.chaos);
         res.json({ data: endpoint });
     } catch (err) {
-        console.error('❌ Chaos update error:', err.message);
-        res.status(500).json({ message: 'Chaos update nahi hui' });
+        res.status(500).json({ error: err.message });
     }
 });
 

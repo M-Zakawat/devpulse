@@ -24,6 +24,7 @@ const { Server } = require('socket.io');
 const endpointRoutes = require('./routes/endpoints');
 const webhookRoutes = require('./routes/webhook');
 const analyticsRoutes = require('./routes/analytics');
+const generateRoutes = require('./routes/generate');
 
 // ---------- 3) APP BANAO (iske baad hi koi app.use!) ----------
 const app = express(); // <-- app YAHAN paida hota hai
@@ -40,6 +41,7 @@ app.get('/', (req, res) => {
 
 app.use('/api/endpoints', endpointRoutes);   // endpoint CRUD + logs + chaos
 app.use('/api/analytics', analyticsRoutes);  // analytics ka data
+app.use('/api/generate', generateRoutes);
 app.use('/hooks', webhookRoutes);            // webhook receiver (sab methods)
 
 // ---------- 6) SOCKET.IO SETUP ----------
